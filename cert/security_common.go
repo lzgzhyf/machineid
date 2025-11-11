@@ -1,7 +1,6 @@
 package cert
 
 import (
-	"crypto/md5"
 	"crypto/rand"
 	"crypto/sha256"
 	"fmt"
@@ -9,7 +8,6 @@ import (
 	"runtime"
 	"strings"
 	"sync"
-	"syscall"
 	"time"
 	"unsafe"
 )
@@ -121,59 +119,8 @@ func detectDebuggerProcess() bool {
 		"fiddler", "burp", "charles", "mitmproxy",
 	}
 
-	// 读取进程列表 (简化实现)
-	switch runtime.GOOS {
-	case "windows":
-		return detectWindowsDebugger(debuggerNames)
-	case "linux":
-		return detectLinuxDebugger(debuggerNames)
-	case "darwin":
-		return detectMacDebugger(debuggerNames)
-	}
-
-	return false
-}
-
-// detectWindowsDebugger Windows调试器检测
-func detectWindowsDebugger(_ []string) bool {
-	// Windows特定检测
-	// 检查IsDebuggerPresent
-	if isDebuggerPresentWindows() {
-		return true
-	}
-
-	// 检查PEB调试标志
-	if checkPEBDebugFlag() {
-		return true
-	}
-
-	// 检查调试器端口
-	if checkDebugPort() {
-		return true
-	}
-
-	return false
-}
-
-// detectLinuxDebugger Linux调试器检测
-func detectLinuxDebugger(_ []string) bool {
-	// 检查/proc/self/status中的TracerPid
-	if checkLinuxTracerPid() {
-		return true
-	}
-
-	// 检查ptrace
-	if checkPtraceUsage() {
-		return true
-	}
-
-	return false
-}
-
-// detectMacDebugger macOS调试器检测
-func detectMacDebugger(_ []string) bool {
-	// macOS特定检测逻辑
-	return checkMacOSDebugging()
+	// 调用平台特定的检测函数
+	return detectPlatformDebugger(debuggerNames)
 }
 
 // detectSystemCallTracing 系统调用跟踪检测
@@ -190,16 +137,13 @@ func detectMemoryDebugging() bool {
 
 // detectDebuggerAPI 调试器API检测
 func detectDebuggerAPI() bool {
-	if runtime.GOOS == "windows" {
-		// Windows调试器API检测
-		return checkWindowsDebugAPI()
-	}
-	return false
+	// 调用平台特定的检测函数
+	return checkPlatformDebugAPI()
 }
 
 // === 防篡改功能 ===
 
-// CalculateChecksum 计算校验和
+// calculateChecksum 计算校验和
 func (sm *SecurityManager) calculateChecksum() {
 	sm.mu.Lock()
 	defer sm.mu.Unlock()
@@ -502,125 +446,9 @@ func (sm *SecurityManager) StopSecurityChecks() {
 	sm.antiDebugActive = false
 }
 
-// === 特定平台实现 ===
+// === 通用实现 ===
 
-// Windows特定实现
-func isDebuggerPresentWindows() bool {
-	// Windows API调用检测调试器
-	if runtime.GOOS != "windows" {
-		return false
-	}
-
-	// 使用已有的平台特定实现
-	return checkDebugger()
-}
-
-func checkPEBDebugFlag() bool {
-	// 检查PEB中的调试标志
-	if runtime.GOOS != "windows" {
-		return false
-	}
-
-	// Windows特定：检查PEB结构中的调试标志
-	// 这需要直接内存访问，为安全考虑使用间接方法
-	// 通过检查异常处理行为来推断是否有调试器
-	defer func() {
-		if r := recover(); r != nil {
-			// 在调试器环境下异常处理可能不同
-			// 这里可以进一步分析
-		}
-	}()
-
-	// 简单的反调试技术：检查时间差异
-	start := time.Now()
-	for i := 0; i < 10; i++ {
-		// 简单循环
-	}
-	duration := time.Since(start)
-
-	// 如果执行时间异常长，可能在调试环境中
-	return duration > time.Microsecond*100
-}
-
-func checkDebugPort() bool {
-	// 检查调试端口
-	if runtime.GOOS != "windows" {
-		return false
-	}
-
-	// Windows特定：通过NtQueryInformationProcess检查调试端口
-	// 这个功能已经在cert_windows.go中实现了
-	return checkDebugger()
-}
-
-func checkWindowsDebugAPI() bool {
-	// 检查Windows调试API
-	if runtime.GOOS != "windows" {
-		return false
-	}
-
-	// 检查是否有调试器API被调用
-	// 这包括检查调试器相关的DLL是否被加载
-	// 以及检查某些调试器特有的行为
-
-	// 简单实现：检查是否有常见调试器进程
-	return detectWindowsDebugger([]string{"windbg", "x32dbg", "x64dbg", "ollydbg"})
-}
-
-// Linux特定实现
-func checkLinuxTracerPid() bool {
-	// 检查/proc/self/status中的TracerPid
-	if runtime.GOOS != "linux" {
-		return false
-	}
-
-	// 使用已有的平台特定实现
-	return checkDebugger()
-}
-
-func checkPtraceUsage() bool {
-	// 检查ptrace使用情况
-	if runtime.GOOS != "linux" {
-		return false
-	}
-
-	// 检查ptrace系统调用的使用情况
-	// 通过尝试ptrace自身来检测是否已被调试
-	// 如果进程已经被ptrace，再次ptrace会失败
-
-	// 这里使用更安全的方法：检查/proc/self/status
-	// 以及检查父进程是否可疑
-	data, err := os.ReadFile("/proc/self/status")
-	if err != nil {
-		return false
-	}
-
-	// 检查是否有tracer
-	lines := strings.Split(string(data), "\n")
-	for _, line := range lines {
-		if strings.HasPrefix(line, "TracerPid:") {
-			fields := strings.Fields(line)
-			if len(fields) >= 2 && fields[1] != "0" {
-				return true
-			}
-		}
-	}
-
-	return false
-}
-
-// macOS特定实现
-func checkMacOSDebugging() bool {
-	// macOS调试检测
-	if runtime.GOOS != "darwin" {
-		return false
-	}
-
-	// 使用已有的平台特定实现
-	return checkDebugger()
-}
-
-// 通用实现
+// checkSyscallInterception 系统调用拦截检测
 func checkSyscallInterception() bool {
 	// 系统调用拦截检测
 	// 检查系统调用是否被拦截或监控
@@ -637,6 +465,7 @@ func checkSyscallInterception() bool {
 	return duration > time.Microsecond*50
 }
 
+// checkMemoryLayout 内存布局检测
 func checkMemoryLayout() bool {
 	// 内存布局检测
 	// 检查内存布局是否异常（可能表示在虚拟或调试环境中）
@@ -666,7 +495,9 @@ func checkMemoryLayout() bool {
 	return diff1 > 1024 || diff2 > 1024
 }
 
-// 虚拟机检测辅助函数
+// === 虚拟机检测辅助函数 ===
+
+// checkVirtualBoxArtifacts 检测VirtualBox特征
 func (sm *SecurityManager) checkVirtualBoxArtifacts() bool {
 	// VirtualBox检测特征
 	vboxIndicators := []string{
@@ -696,26 +527,11 @@ func (sm *SecurityManager) checkVirtualBoxArtifacts() bool {
 		}
 	}
 
-	// Linux特定检查
-	if runtime.GOOS == "linux" {
-		// 检查/proc/cpuinfo
-		if data, err := os.ReadFile("/proc/cpuinfo"); err == nil {
-			if strings.Contains(strings.ToLower(string(data)), "vbox") {
-				return true
-			}
-		}
-
-		// 检查/proc/modules
-		if data, err := os.ReadFile("/proc/modules"); err == nil {
-			if strings.Contains(strings.ToLower(string(data)), "vbox") {
-				return true
-			}
-		}
-	}
-
-	return false
+	// 调用平台特定的检测
+	return checkPlatformVirtualBox()
 }
 
+// checkHyperVArtifacts 检测Hyper-V特征
 func (sm *SecurityManager) checkHyperVArtifacts() bool {
 	// Hyper-V检测特征
 	hypervIndicators := []string{
@@ -732,27 +548,11 @@ func (sm *SecurityManager) checkHyperVArtifacts() bool {
 		}
 	}
 
-	// Windows特定检查
-	if runtime.GOOS == "windows" {
-		// 检查Hyper-V服务
-		// 这里使用简化实现
-		return false
-	}
-
-	// Linux下检查虚拟化标志
-	if runtime.GOOS == "linux" {
-		if data, err := os.ReadFile("/proc/cpuinfo"); err == nil {
-			cpuinfo := strings.ToLower(string(data))
-			if strings.Contains(cpuinfo, "hypervisor") ||
-				strings.Contains(cpuinfo, "microsoft") {
-				return true
-			}
-		}
-	}
-
-	return false
+	// 调用平台特定的检测
+	return checkPlatformHyperV()
 }
 
+// checkQEMUArtifacts 检测QEMU特征
 func (sm *SecurityManager) checkQEMUArtifacts() bool {
 	// QEMU检测特征
 	qemuIndicators := []string{
@@ -770,30 +570,13 @@ func (sm *SecurityManager) checkQEMUArtifacts() bool {
 		}
 	}
 
-	// Linux特定检查
-	if runtime.GOOS == "linux" {
-		// 检查/proc/cpuinfo
-		if data, err := os.ReadFile("/proc/cpuinfo"); err == nil {
-			cpuinfo := strings.ToLower(string(data))
-			for _, indicator := range qemuIndicators {
-				if strings.Contains(cpuinfo, strings.ToLower(indicator)) {
-					return true
-				}
-			}
-		}
-
-		// 检查设备管理器
-		if data, err := os.ReadFile("/proc/scsi/scsi"); err == nil {
-			if strings.Contains(strings.ToLower(string(data)), "qemu") {
-				return true
-			}
-		}
-	}
-
-	return false
+	// 调用平台特定的检测
+	return checkPlatformQEMU()
 }
 
-// 沙箱检测辅助函数
+// === 沙箱检测辅助函数 ===
+
+// detectCuckooSandbox 检测Cuckoo Sandbox
 func (sm *SecurityManager) detectCuckooSandbox() bool {
 	// Cuckoo Sandbox检测特征
 	cuckooIndicators := []string{
@@ -821,25 +604,11 @@ func (sm *SecurityManager) detectCuckooSandbox() bool {
 		}
 	}
 
-	// Windows特定检查
-	if runtime.GOOS == "windows" {
-		// 检查Cuckoo特有的文件和目录
-		cuckooArtifacts := []string{
-			"C:\\cuckoo",
-			"C:\\Python27\\Lib\\site-packages\\cuckoo",
-			"C:\\analysis",
-		}
-
-		for _, artifact := range cuckooArtifacts {
-			if _, err := os.Stat(artifact); err == nil {
-				return true
-			}
-		}
-	}
-
-	return false
+	// 调用平台特定的检测
+	return checkPlatformCuckoo()
 }
 
+// detectJoeSandbox 检测Joe Sandbox
 func (sm *SecurityManager) detectJoeSandbox() bool {
 	// Joe Sandbox检测特征
 	joeIndicators := []string{
@@ -869,23 +638,11 @@ func (sm *SecurityManager) detectJoeSandbox() bool {
 		}
 	}
 
-	// 检查文件系统特征
-	if runtime.GOOS == "windows" {
-		joeArtifacts := []string{
-			"C:\\joesandbox",
-			"C:\\analysis",
-		}
-
-		for _, artifact := range joeArtifacts {
-			if _, err := os.Stat(artifact); err == nil {
-				return true
-			}
-		}
-	}
-
-	return false
+	// 调用平台特定的检测
+	return checkPlatformJoeSandbox()
 }
 
+// detectAnubis 检测Anubis沙箱
 func (sm *SecurityManager) detectAnubis() bool {
 	// Anubis沙箱检测特征
 	anubisIndicators := []string{
@@ -912,51 +669,19 @@ func (sm *SecurityManager) detectAnubis() bool {
 		}
 	}
 
-	// 检查系统特征
-	// Anubis通常运行在Linux环境中
-	if runtime.GOOS == "linux" {
-		// 检查进程列表中是否有可疑进程
-		if data, err := os.ReadFile("/proc/version"); err == nil {
-			version := strings.ToLower(string(data))
-			for _, indicator := range anubisIndicators {
-				if strings.Contains(version, indicator) {
-					return true
-				}
-			}
-		}
-	}
-
-	return false
+	// 调用平台特定的检测
+	return checkPlatformAnubis()
 }
 
-// 注入检测辅助函数
+// === 注入检测辅助函数 ===
+
+// detectDLLInjection DLL注入检测
 func (sm *SecurityManager) detectDLLInjection() bool {
-	// DLL注入检测（主要针对Windows）
-	if runtime.GOOS != "windows" {
-		return false
-	}
-
-	// 检查异常的内存映射
-	// 这里使用简化的检测方法：
-	// 检查程序的内存使用情况是否异常
-
-	// 记录开始的内存状态
-	var m1, m2 runtime.MemStats
-	runtime.ReadMemStats(&m1)
-
-	// 稍作等待
-	time.Sleep(time.Millisecond * 10)
-
-	// 再次检查内存
-	runtime.ReadMemStats(&m2)
-
-	// 如果内存使用突然大幅增加，可能有注入
-	memIncrease := m2.Alloc - m1.Alloc
-
-	// 阈值设定为1MB，超过这个值可能有问题
-	return memIncrease > 1024*1024
+	// 调用平台特定的检测
+	return checkPlatformDLLInjection()
 }
 
+// detectCodeInjection 代码注入检测
 func (sm *SecurityManager) detectCodeInjection() bool {
 	// 代码注入检测
 	// 检查进程内存中是否有异常的可执行区域
@@ -972,40 +697,22 @@ func (sm *SecurityManager) detectCodeInjection() bool {
 	return numGoroutines > 100
 }
 
-// 内存保护辅助函数
+// === 内存保护辅助函数 ===
+
+// encryptCriticalMemory 加密关键内存区域
 func (sm *SecurityManager) encryptCriticalMemory() {
-	// 加密关键内存区域
-	key := md5.Sum([]byte("cert-security-key"))
-	for i := range sm.memProtect {
-		sm.memProtect[i] ^= key[i%len(key)]
-	}
+	// 使用平台特定的加密方法
+	encryptMemoryPlatform(sm.memProtect)
 }
 
+// setMemoryPermissions 设置内存页面权限
 func (sm *SecurityManager) setMemoryPermissions() error {
-	// 设置内存页面权限
-	if runtime.GOOS == "linux" {
-		// Linux mprotect调用
-		return sm.mprotectLinux()
-	}
-	return nil
+	// 调用平台特定的内存保护
+	return setMemoryPermissionsPlatform(sm.memProtect)
 }
 
-func (sm *SecurityManager) mprotectLinux() error {
-	// Linux内存保护
-	ptr := uintptr(unsafe.Pointer(&sm.memProtect[0]))
-	size := uintptr(len(sm.memProtect))
-
-	// 设置为只读
-	_, _, errno := syscall.Syscall(syscall.SYS_MPROTECT, ptr, size, syscall.PROT_READ)
-	if errno != 0 {
-		return errno
-	}
-
-	return nil
-}
-
+// encryptSensitiveData 加密敏感数据
 func (sm *SecurityManager) encryptSensitiveData(key []byte) error {
-	// 加密敏感数据
 	if len(key) < 32 {
 		return fmt.Errorf("encryption key must be at least 32 bytes")
 	}
